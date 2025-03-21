@@ -1,0 +1,106 @@
+networks:
+  env_test:
+    ipam:
+      config:
+        - subnet: 172.27.1.0/24
+
+services:
+  nats:
+    image: nats:2.10.26-alpine
+    container_name: test_nats
+    command: ["nats-server", "--http_port", "8222"]
+    networks:
+      env_test:
+        ipv4_address: 172.27.1.100
+    restart: always
+
+  redis:
+    image: redis:alpine
+    container_name: test_redis
+    command: ["redis-server", "--loglevel", "warning"]
+    networks:
+      env_test:
+        ipv4_address: 172.27.1.101
+    restart: always
+
+  mariadb:
+    image: mariadb:10.11
+    container_name: test_mariadb
+    environment:
+      MARIADB_USER: chris
+      MARIADB_PASSWORD: 123456
+      MARIADB_DATABASE: simulate
+      MARIADB_ALLOW_EMPTY_ROOT_PASSWORD: "1"
+    networks:
+      env_test:
+        ipv4_address: 172.27.1.102
+    restart: always
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      retries: 5
+      start_period: 5s
+
+  db_maker:
+    image: golang:1.24-bullseye
+    container_name: db_maker
+    working_dir: /app
+    volumes:
+      - {{Dist}}:/app
+    command: ["/app/db_maker", "--name", "docker"]
+    depends_on:
+      nats:
+        condition: service_started
+      redis:
+        condition: service_started
+      mariadb:
+        condition: service_healthy
+    networks:
+      - env_test
+    restart: no
+
+  data_center:
+    image: golang:1.24-bullseye
+    container_name: data_center
+    working_dir: /app
+    volumes:
+      - {{Dist}}:/app
+    command: ["/app/data_center", "--debug", "--setting", "/app/asset/json/setting.json"]
+    depends_on:
+      db_maker:
+        condition: service_completed_successfully
+    networks:
+      - env_test
+    restart: always
+    ports:
+      - "9090:9090"
+
+  gate:
+    image: golang:1.24-bullseye
+    container_name: gate
+    working_dir: /app
+    volumes:
+      - {{Dist}}:/app
+    command: ["/app/gate", "--debug", "--port", "8080", "--api_addr", "172.27.1.2:9090"]
+    depends_on:
+      data_center:
+        condition: service_started
+    networks:
+      - env_test
+    restart: always
+    ports:
+      - "8080:8080"
+
+  game_1060:
+    image: golang:1.24-bullseye
+    container_name: game_1060
+    working_dir: /app
+    volumes:
+      - {{Dist}}:/app
+    command: ["/app/game_1060", "--debug", "--local", "--game_id", "1060", "--group_id", "00", "--api_addr", "172.27.1.2:9090"]
+    depends_on:
+      data_center:
+        condition: service_started
+    networks:
+      - env_test
+    restart: always
